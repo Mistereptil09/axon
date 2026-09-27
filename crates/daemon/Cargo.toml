@@ -1,0 +1,16 @@
+[package]
+name = "axon-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+axon-shared = { path = "../shared"}
+
+[[bin]]
+name = "axon-daemon"
+path = "src/main.rs"
+test = false

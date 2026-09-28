@@ -1,13 +1,13 @@
 # Axon architecture
 
-> Restart docs: [README](README.md) · [ARCHITECTURE](ARCHITECTURE.md) · [ROADMAP](ROADMAP.md) · [S0](S0.md)
+> Docs: [README](README.md) · [ARCHITECTURE](ARCHITECTURE.md) · [ROADMAP](ROADMAP.md) · [OPEN QUESTIONS](OPEN_QUESTIONS.md) · [S0](Vertical_slices/S0.md)
 
 ## 1. Components
 
 | Component | Binary | Runs on | Role | Listens on the network? |
 |---|---|---|---|---|
-| **Orchestrator** | `axon-orchestrator` | any machine (home server, desktop) | Core: conversations, event log, agent loop, approval relay, device registry, scheduler; adapters (client WS, Telegram) | **Yes, one port** (WebSocket; no TLS before [S6](ROADMAP.md#V1)) |
-| **Daemon** | `axon-daemon` | each machine Axon acts on | Tools, policy, guard, sandbox, checkpoints, snapshots, grants, verifies approvals, kill switch | **No.** A local Unix socket only. |
+| **Orchestrator** | `axon-orchestrator` | any machine (home server, desktop) | Core: conversations, event log, agent loop, approval relay, device registry, scheduler; adapters (client WS, Telegram) | **Yes, one port** (plain WebSocket; no TLS in V1, see [§3](#3-connections)) |
+| **Daemon** | `axon-daemon` | each machine Axon acts on | Tools, policy, guard, sandbox, checkpoints, grants, verifies approvals, kill switch | **No.** A local Unix socket only. |
 | **Desktop client** | `axon-desk` | the machine you sit at | Tray icon (state), **chat bar** (hotkey), **voice** (push-to-talk, STT/TTS via providers), notifications, **local approver** (holds an approver key) | No |
 | **CLI** | `axon` | anywhere | `axon chat`, `axon approve`, `axon pair`, admin | No |
 | **Model provider** | external (llama.cpp, Ollama, vLLM, cloud) | any machine (a GPU box) | Chat completions, OpenAI-compatible | its own HTTP port |
@@ -35,7 +35,7 @@ The tray and the chat bar are **one process** (`axon-desk`) to keep the componen
  │   │ ⑥ Unix socket (kill switch,         │         │   ORCHESTRATOR       │
  │   ▼    local-tier approvals)            │         │   one port (no TLS)  │
  │ axon-daemon ────────────────────────────┼──WS───▶ │   /link  (daemons)   │
- │   guard · sandbox · snapshots · journal │   ①     │   /client (clients)  │
+ │ guard · sandbox · checkpoints · journal │   ①     │   /client (clients)  │
  └─────────────────────────────────────────┘         └──────────▲───────────┘
                                                                 │ ① WS
  ┌──── headless server ────┐                                    │
@@ -50,14 +50,14 @@ The tray and the chat bar are **one process** (`axon-desk`) to keep the componen
 
 | # | From → To | Transport | Authentication | Carries |
 |---|---|---|---|---|
-| ① | daemon → orchestrator `/link` | Plain WebSocket in V1 (**no TLS**: trusted network only, see [ADR 0001](ADR/01.md)). Later: TLS, **orchestrator public key pinned** at pairing | Device **Ed25519** key, challenge-response in `Hello` (no bearer token) | `CallTool`, `ToolResult`, `ApprovalChallenge`/`Response`, `CancelCall`, `CapabilitiesChanged`, `Notify`, `Ping` |
-| ② | client (desk, CLI) → orchestrator `/client` | Plain WebSocket in V1 (no TLS). Later: TLS, pinned | Device Ed25519 key, challenge-response | Commands: `SendMessage`, `Subscribe{conv, from_seq}`, `Cancel`, `Approve(signed)`, `Rollback`. Events stream back. |
+| ① | daemon → orchestrator `/link` | Plain WebSocket in V1 (**no TLS**: trusted network only, see [ADR 01](decisions/01-threat-model.md)). V2: TLS, **orchestrator public key pinned** at pairing | Device **Ed25519** key, challenge-response in `Hello` (no bearer token) | `CallTool`, `ToolResult`, `ApprovalChallenge`/`Response`, `CancelCall`, `CapabilitiesChanged`, `Notify`, `Ping` |
+| ② | client (desk, CLI) → orchestrator `/client` | Plain WebSocket in V1 (no TLS). V2: TLS, pinned | Device Ed25519 key, challenge-response | Commands: `SendMessage`, `Subscribe{conv, from_seq}`, `Cancel`, `Approve(signed)`, `Rollback`. Events stream back. |
 | ③ | orchestrator → model / STT / TTS provider | HTTP(S), whatever the endpoint offers | API key from env/secret (optional for local) | OpenAI-compatible requests |
 | ③' | desk → STT / TTS provider | HTTP(S) or in-process | API key if remote | audio in, text out / text in, audio out |
 | ④ | orchestrator → Telegram API | HTTPS long polling (outbound only) | Bot token (secret); **only allowlisted chat ids** are accepted | messages, inline-button callbacks |
-| ⑥ | desk → local daemon | Unix socket in `$XDG_RUNTIME_DIR`, mode 0600 | `SO_PEERCRED`: same uid only. **Not enough on its own:** every process of yours passes it, sandboxed children included ([Q1](OPEN_QUESTIONS.md#q1) | kill switch / pause, `local`-tier approvals (signed, so the uid check isn't what protects them), status |
+| ⑥ | desk → local daemon | Unix socket in `$XDG_RUNTIME_DIR`, mode 0600 | `SO_PEERCRED`: same uid only. **Not enough on its own:** every process of yours passes it, sandboxed children included ([Q1](OPEN_QUESTIONS.md#q1-same-uid-local-sockets)) | kill switch / pause, `local`-tier approvals (signed, so the uid check isn't what protects them), status |
 
-**No TLS in V1: ① and ② are plain WebSocket, so they must only run on a trusted network** (localhost, a LAN you control, or a VPN such as Tailscale, which then provides the encryption). On an untrusted network, anyone on the path can read every conversation and inject messages after `Hello`. Signed `device`/`local` approvals still can't be forged or replayed; everything else can be. See [ADR 0001](ADR/01.md) §2b and §4. Adding TLS with a pinned key is what lifts this restriction; after that, a VPN becomes optional.
+**No TLS in V1: ① and ② are plain WebSocket, so they must only run on a trusted network** (localhost, a LAN you control, or a VPN such as Tailscale, which then provides the encryption). On an untrusted network, anyone on the path can read every conversation and inject messages after `Hello`. Signed `device`/`local` approvals still can't be forged or replayed; everything else can be. See [ADR 01](decisions/01-threat-model.md) §2b and §4. Adding TLS with a pinned key (V2) is what lifts this restriction; after that, a VPN becomes optional.
 
 **Once TLS is added, pin the key, not the certificate:** devices store a hash of the orchestrator's public key (SPKI), so the certificate can be renewed with the same key without pairing again.
 
@@ -83,9 +83,9 @@ The tray and the chat bar are **one process** (`axon-desk`) to keep the componen
 | Model | **never**: assumed injectable | it sees whatever it reads |
 | Model provider host | — | sees everything sent to the model (**a user choice: local GPU box vs cloud**) |
 | Telegram | `chat` tier only | **sees Telegram chats** (not end-to-end encrypted) |
-| Tool output, web, files, email | never: labelled untrusted; which of these taint the conversation is [Q3](OPEN_QUESTIONS#q3) | — |
-| Sandboxed children (`run`) | never: they may be running code from an untrusted repo. They must reach neither keys nor local sockets | only the declared roots |
-| Other processes running as you (not sandboxed) | not trusted, but **not defended against in V1**: they can read the daemon's keys. Known limitation, see [Q4](OPEN_QUESTIONS#q4) | same |
+| Tool output, web, files, email | never: labelled untrusted; which of these taint the conversation is [Q3](OPEN_QUESTIONS.md#q3-what-taints-a-conversation) | — |
+| Sandboxed children (`run`) | never: they may be running code from an untrusted repo. They must reach neither keys nor local sockets | only the workspaces |
+| Other processes running as you (not sandboxed) | not trusted, but **not defended against in V1**: they can read the daemon's keys. Known limitation, see [Q4](OPEN_QUESTIONS.md#q4-splitting-the-daemon) | same |
 
 What each tier means under a compromised orchestrator:
 - `chat`: the orchestrator can approve it.
@@ -93,15 +93,17 @@ What each tier means under a compromised orchestrator:
 
 ## 5. Security layers on each daemon
 
+**Workspace:** a folder listed in the daemon's `policy.toml` where Axon may act (e.g. `~/proj`, `~/notes`). Every workspace is checkpointed. A daemon tool refuses any path outside every workspace. (Called *roots* in older notes and ADR 01, `allowed_paths` in the old code.)
+
 | Layer | What it does |
 |---|---|
 | **Never root** | Refuses `sudo`, `pkexec`, `su`, `doas`, setuid helpers. The daemon runs as the user, under a systemd user unit. |
-| **Path guard** | Absolute paths only (or one declared base). The nearest existing ancestor is canonicalized. Deny globs are decided before existence. The **protected set** covers `policy.toml`, `grants.toml`, keys, the journal, the daemon binary and its units. **Default deny list:** `.git/hooks/**`, `.git/config`, `.envrc`, shell rc files, autostart, systemd user units. |
-| **Command guard** | No shell. The program is resolved to an absolute canonical path. Binaries inside roots are refused. The child env is rebuilt (`PATH`, no `LD_*`, `GIT_*`, `PAGER`…). The `exec_bounded` git forms run with `--no-pager`, `-c core.fsmonitor=false`, `-c core.hooksPath=/dev/null` (and `--no-ext-diff` for diff/log), because a repo's `.git/config` can make even `git status` run a program. |
-| **Sandbox** | Every `run` child is under **Landlock**: read/write only in the declared roots plus system read-only paths, and **no access to the daemon's state/config dirs or the `axon-desk` key**. **No network:** the child gets its own empty network namespace unless the call is classified `egress` (Landlock's network rules cover TCP only, so DNS over UDP would stay open). **No local sockets:** it must not reach `$XDG_RUNTIME_DIR`, which holds the session bus (`systemd-run --user` there = sandbox escape) and the daemon socket ⑥; how is [Q1](OPEN_QUESTIONS#q1). Resources are capped (`systemd-run --user --scope`, `MemoryMax`, `TasksMax`), with a timeout and an output cap. |
-| **Checkpoints** | A shadow git repo per root (separate `GIT_DIR`). Every write or delete by a daemon tool is committed under `refs/axon/conv/<conversation>` at its event `seq`. **Rewind** = restore files to their state before event N. Before restoring, the daemon checks that the file still has the recorded hash, and on a conflict it refuses and shows a diff. Deleting a conversation deletes its ref, and periodic `gc` removes snapshots nothing points to anymore. Retention is capped by age and size, and the root's `.gitignore` is respected. |
+| **Path guard** | The path must be inside a workspace. Absolute paths only (or one declared base). The nearest existing ancestor is canonicalized. Deny globs are decided before existence. The **protected set** covers `policy.toml`, `grants.toml`, keys, the journal, the daemon binary and its units. **Default deny list:** `.git/hooks/**`, `.git/config`, `.envrc`, shell rc files, autostart, systemd user units. |
+| **Command guard** | No shell. The program is resolved to an absolute canonical path. Binaries inside workspaces are refused. The child env is rebuilt (`PATH`, no `LD_*`, `GIT_*`, `PAGER`…). The `exec_bounded` git forms run with `--no-pager`, `-c core.fsmonitor=false`, `-c core.hooksPath=/dev/null` (and `--no-ext-diff` for diff/log), because a repo's `.git/config` can make even `git status` run a program. |
+| **Sandbox** | Every `run` child is under **Landlock**: read/write only in the workspaces plus system read-only paths, and **no access to the daemon's state/config dirs or the `axon-desk` key**. **No network:** the child gets its own empty network namespace unless the call is classified `egress` (Landlock's network rules cover TCP only, so DNS over UDP would stay open). **No local sockets:** it must not reach `$XDG_RUNTIME_DIR`, which holds the session bus (`systemd-run --user` there = sandbox escape) and the daemon socket ⑥; how is [Q1](OPEN_QUESTIONS.md#q1-same-uid-local-sockets). Resources are capped (`systemd-run --user --scope`, `MemoryMax`, `TasksMax`), with a timeout and an output cap. |
+| **Checkpoints** | A shadow git repo per workspace (separate `GIT_DIR`). Every write or delete by a daemon tool is committed under `refs/axon/conv/<conversation>` at its event `seq`. **Rewind** = restore files to their state before event N. Before restoring, the daemon checks that the file still has the recorded hash, and on a conflict it refuses and shows a diff. Deleting a conversation deletes its ref, and periodic `gc` removes commits nothing points to anymore. Retention is capped by age and size, and the workspace's `.gitignore` is respected. Writes made by a `run` child are not recorded yet: [Q2](OPEN_QUESTIONS.md#q2-btrfs-snapshots). |
 | **Exec barrier** | A `run` call waits while any unreviewed write exists in the conversation. The card shows *command + pending writes*: [Keep all & run] / [Roll back & cancel] / per-item. A rollback returns `Cancelled(user_rollback)` to the model. |
-| **Taint** | Tools that bring in outside content (web fetch, downloaded files, email later) set `ConversationTainted`. After that, `egress` and `exec_general` are raised one tier, for the rest of the conversation. Whether reading a local file taints is [Q3](OPEN_QUESTIONS#q3). |
+| **Taint** | Tools that bring in outside content (web fetch, downloaded files, email later) set `ConversationTainted`. After that, `egress` and `exec_general` are raised one tier, for the rest of the conversation. Whether reading a local file taints is [Q3](OPEN_QUESTIONS.md#q3-what-taints-a-conversation). |
 | **Limits** | Max tool calls per turn, repeated-call detection, per-tool timeouts, output caps. |
 | **Kill switch** | A hotkey in `axon-desk` or the voice word "stop" goes to the local socket (⑥). The daemon kills every running tool's process group, enters **paused** (refusing `CallTool`), and tells the orchestrator best-effort. Resume is explicit. |
 
@@ -111,9 +113,9 @@ What each tier means under a compromised orchestrator:
 
 | Class | Definition | Default tier |
 |---|---|---|
-| `read` | read, list or search inside roots | `auto` |
+| `read` | read, list or search inside workspaces | `auto` |
 | `write_reversible` | a write or delete covered by checkpoints | `notify` (subject to the exec barrier) |
-| `write_irreversible` | outside checkpointed roots, over the size cap | `device` |
+| `write_irreversible` | a write inside a workspace that checkpoints can't record: over the size cap, or a file the workspace's `.gitignore` excludes | `device` |
 | `exec_bounded` | a **built-in** list of exact safe forms (`git status/diff/log`, `ls`…) | `auto` |
 | `exec_general` | any other program (interpreters, build tools…) | `device` |
 | `egress` | sends data off the machine (network program, upload, web fetch with data) | `device` |
@@ -212,10 +214,10 @@ enum LiveEvent { ModelDelta { text }, ToolProgress { call_id, line } }
 axon/
   crates/
     shared/        link + client protocol, Event, ActionDescriptor, RiskClass/Tier, policy schema, crypto helpers
-    daemon/        guard, caps/tools, sandbox, checkpoints, snapshots, grants, approvals verify, link client, local socket
+    daemon/        guard, caps/tools, sandbox, checkpoints, grants, approvals verify, link client, local socket
     orchestrator/  core (runtime, event log, conversation tasks, approvals relay, devices, scheduler)
                   providers/ (openai_compat: chat, stt, tts)   adapters/ (client_ws, telegram; V2: openai)
     desk/          axon-desk: tray, chat bar, voice, local approver
     cli/           axon: chat, approve, pair, admin
-  docs/          ARCHITECTURE.md, ROADMAP.md, decisions/NN-*.md
+  docs/          README.md, ARCHITECTURE.md, ROADMAP.md, OPEN_QUESTIONS.md, Vertical_slices/SN.md, decisions/NN-*.md
 ```

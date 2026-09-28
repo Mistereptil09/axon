@@ -1,6 +1,6 @@
-# Axon restart
+# Axon
 
-> Restart docs: [README](README.md) · [ARCHITECTURE](ARCHITECTURE.md) · [ROADMAP](ROADMAP.md) · [S0](S0.md)
+> Docs: [README](README.md) · [ARCHITECTURE](ARCHITECTURE.md) · [ROADMAP](ROADMAP.md) · [OPEN QUESTIONS](OPEN_QUESTIONS.md) · [S0](Vertical_slices/S0.md)
 
 ## What Axon is
 A Jarvis-like assistant that acts on your computers on your behalf, and that you can trust not to break them.
@@ -10,7 +10,7 @@ A Jarvis-like assistant that acts on your computers on your behalf, and that you
 
 ## The four pillars
 1. **Safety:** it can't break the computer, and whatever it did can be undone.
-2. **Action:** typed tools for common intents, and a sandboxed shell as the fallback.
+2. **Action:** typed tools for common intents, and sandboxed commands (`run`, no shell) as the fallback.
 3. **Presence:** a chat bar on a hotkey, voice, the tray, notifications, and Telegram when you're away.
 4. **Proactivity:** timers, a briefing and health alerts first, ambient sensors later.
 
@@ -32,17 +32,17 @@ A Jarvis-like assistant that acts on your computers on your behalf, and that you
 | 13 | **Single user in V1**, with `account_id` kept in the schema | Multi-account features cost a lot and help nobody yet. |
 | 14 | **Errors:** a stable reason code + a friendly message + the raw detail, all visible to the model | An error may show anything the environment description already shows. |
 | 15 | **Cancel ≠ rollback:** cancel stops what is running, rollback undoes effects. `Tool::reversible()` defaults to `false` | Not every action can be undone (commands, MCP tools), and the UI says so. |
-| 16 | The **orchestrator runs as a dedicated system user** (`DynamicUser=yes`) in production | It never touches your files, so a hijacked orchestrator can't read your home. The daemon can't do the same (see #9); splitting it is [Q4](OPEN_QUESTIONS.md#q4). |
-| 17 | Devices **pin the orchestrator's public key** | The certificate can be renewed without pairing every device again. |
+| 16 | The **orchestrator runs as a dedicated system user** (`DynamicUser=yes`) in production | It never touches your files, so a hijacked orchestrator can't read your home. The daemon can't do the same (see #9); splitting it is [Q4](OPEN_QUESTIONS.md#q4-splitting-the-daemon). |
+| 17 | **No TLS in V1**: plain WebSocket on a trusted network (localhost, your LAN, Tailscale). TLS arrives in V2, and devices then **pin the orchestrator's public key** | Less to build before the first real turn; signed approvals still can't be forged on a plain connection ([ADR 01](decisions/01-threat-model.md) §2b). Pinning the key rather than the certificate means it can be renewed without pairing every device again. |
 | 18 | Tool calls run **at most once**: the daemon records `Started` before running | Re-running a command after a crash could do it twice. A call that started but never finished is `Interrupted`. |
 | 19 | The `local` tier is defined **by the key** (this machine's `axon-desk` key), not by the socket it arrives on | The local socket only checks the uid, which any process of yours, sandboxed children included, also passes. |
 
-Still open: [OPEN QUESTIONS](OPEN_QUESTIONS.md) (same-uid sockets, snapshots without root, taint scope, daemon split).
+Still open: [OPEN QUESTIONS](OPEN_QUESTIONS.md) (same-uid sockets, undoing what `run` writes, taint scope, daemon split).
 
 ## What carries over from the old code
 - Enforcement in the daemon, fail closed, policy edited by humans only, and the protected set.
 - **The path guard:** canonicalize the nearest ancestor, and decide every refusal before checking whether the file exists.
-- **The command guard:** no shell, absolute program resolution, refuse binaries inside roots, and rebuild the child's environment.
+- **The command guard:** no shell, absolute program resolution, refuse binaries inside workspaces, and rebuild the child's environment.
 - Capability handles plus the source-scan test.
 - Provenance labels and the reserved marker namespace.
 - Replayable evals.

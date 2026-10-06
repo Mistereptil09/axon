@@ -54,3 +54,8 @@ The executor only accepts orders from the guardian (uid-checked socket). It's tw
 
 ## Q8: Invisible characters
 **Decide in S9.** Hidden zero-width Unicode in a calendar invite was enough to compromise goose. Defanging should strip or show invisible and bidi characters in every untrusted text before the model or the user sees it.
+
+## Q9: Recipes
+**Decide in S9**, once the eval set shows which tasks fail. A recipe is a known workflow where the model only picks the recipe and fills its slots, and the harness runs the steps: the most concrete form of "shrink each task".
+- Hermes writes skills from successful runs on its own; a small model's skill can quietly keep its mistakes. Here a successful run can be *proposed* as a recipe, and kept only after you review it (like `policy.toml`, recipes are edited by humans only).
+- Failing to match a recipe is a normal outcome: the model says "I can't do this reliably" instead of improvising.

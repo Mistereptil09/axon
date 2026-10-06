@@ -17,4 +17,4 @@
 - **Meta's Rule of Two:** a session may have at most two of untrusted input, private data, outside effects.
 - **[Source study of 11 harnesses](https://arxiv.org/pdf/2609.00006):** none use vector retrieval, and behaviour rules are moving from prompts to config.
 
-Resulting questions: [Q5–Q8](../OPEN_QUESTIONS.md#q5-what-an-approved-command-really-runs).
+Resulting questions: [Q5–Q9](../OPEN_QUESTIONS.md#q5-what-an-approved-command-really-runs).

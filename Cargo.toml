@@ -12,3 +12,6 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+
+[workspace.depenencies]
+serde = { version = "1.0.229", features = ["derive"] }

@@ -9,7 +9,7 @@ workspace = true
 
 [dependencies]
 axon-shared = { path = "../shared"}
-serde = { version = "1.0.229", features = ["derive"] }
+serde.workspace = true
 
 [[bin]]
 name = "axon-orchestrator"

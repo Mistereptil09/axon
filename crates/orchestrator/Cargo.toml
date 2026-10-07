@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 axon-shared = { path = "../shared"}
+clap.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

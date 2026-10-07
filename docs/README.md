@@ -67,7 +67,7 @@ Still open: [OPEN QUESTIONS](OPEN_QUESTIONS.md) (same-uid sockets, undoing what 
 ## Code rules
 - Errors are `thiserror` enums per layer, and text is rendered only at the edge.
 - One `Config` struct per binary. Env is used only for secrets and for paths (`XDG_*`, and the directories systemd hands a service: `STATE_DIRECTORY`, `RUNTIME_DIRECTORY`, `CONFIGURATION_DIRECTORY`).
-- Paths resolve in one order: explicit config path → systemd directory → XDG default. Nothing is hardcoded.
+- Paths resolve in one order: explicit path (in the config file; `--config` for the config file itself) → systemd directory → XDG default under `axon/<app>/`, one subfolder per binary. Nothing is hardcoded.
 - Comments state invariants in 1–2 lines. History goes in ADRs.
 - Runtime state lives in XDG dirs on a real filesystem (not exFAT: old bug #3). Secrets are created `0600` in one step (never create-then-chmod), and loading one that is group- or world-readable is an error.
 - The repo lives on an internal disk: exFAT has no permission bits, so the secrets tests can't pass there.

@@ -11,6 +11,9 @@ workspace = true
 axon-shared = { path = "../shared"}
 serde.workspace = true
 
+[dev-dependencies]
+toml.workspace = true
+
 [[bin]]
 name = "axon-orchestrator"
 path = "src/main.rs"

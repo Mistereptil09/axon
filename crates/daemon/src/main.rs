@@ -1,6 +1,5 @@
-use axon_daemon::config::{Config, RawConfig};
-use axon_shared::config::load;
-use axon_shared::paths::{self, App};
+use axon_daemon::run::run;
+use axon_shared::report::report;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -13,28 +12,8 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-
-    let config_file = match paths::config_file(App::Daemon, args.config) {
-        Ok(path) => path,
-        Err(error) => {
-            eprintln!("error: {error}");
-            std::process::exit(1);
-        }
-    };
-
-    let raw_config: RawConfig = match load(&config_file) {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("error: {error}");
-            std::process::exit(1);
-        }
-    };
-
-    let _config: Config = match raw_config.resolve() {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("error: {error}");
-            std::process::exit(1);
-        }
-    };
+    if let Err(error) = run(args.config) {
+        report(error.as_ref());
+        std::process::exit(1);
+    }
 }

@@ -1,2 +1,6 @@
+# Build directory
 /target
 Agent.md
+
+# Config test file
+config.toml

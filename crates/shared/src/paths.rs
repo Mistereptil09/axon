@@ -3,6 +3,31 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use thiserror::Error;
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "PathBuf")]
+pub struct AbsolutePath(PathBuf);
+
+impl TryFrom<PathBuf> for AbsolutePath {
+    type Error = String;
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        if path.is_absolute() {
+            Ok(AbsolutePath(path))
+        } else {
+            Err(format!(
+                "must be an absolute path, got `{}`",
+                path.display()
+            ))
+        }
+    }
+}
+
+impl AbsolutePath {
+    #[must_use]
+    pub fn into_inner(self) -> PathBuf {
+        self.0
+    }
+}
+
 /// Each binary gets its own subfolder under the XDG defaults, so their files never mix.
 #[derive(Debug, Clone, Copy)]
 pub enum App {
@@ -44,8 +69,8 @@ impl std::fmt::Display for DirKind {
 #[derive(Deserialize, Default, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct RawPaths {
-    state_dir: Option<PathBuf>,
-    runtime_dir: Option<PathBuf>,
+    state_dir: Option<AbsolutePath>,
+    runtime_dir: Option<AbsolutePath>,
 }
 
 pub struct Paths {
@@ -108,42 +133,32 @@ impl RawPaths {
     /// Only the XDG default gets the per-app subfolder: explicit and systemd paths are already specific.
     /// # Errors
     /// The first `PathError` from any directory.
-    pub fn resolve(&self, app: App) -> Result<Paths, PathError> {
+    pub fn resolve(self, app: App) -> Result<Paths, PathError> {
         Ok(Paths {
-            state: self.state_dir(app)?,
-            runtime: self.runtime_dir(app)?,
+            state: state_dir(app, self.state_dir.map(AbsolutePath::into_inner))?,
+            runtime: runtime_dir(app, self.runtime_dir.map(AbsolutePath::into_inner))?,
         })
     }
+}
 
-    /// Where Axon keeps its persistent state
-    /// # Errors
-    /// `PathError::NotFound` if no directory can be determined,
-    /// `PathError::NotAbsolute` if the chosen path is relative.
-    fn state_dir(&self, app: App) -> Result<PathBuf, PathError> {
-        let xdg = ProjectDirs::from("", "", "axon")
-            .and_then(|dirs| dirs.state_dir().map(|dir| dir.join(app.dir_name())));
-        find_dir(
-            DirKind::State,
-            self.state_dir.clone(),
-            "STATE_DIRECTORY",
-            xdg,
-        )
-    }
+/// Where Axon keeps its persistent state
+/// # Errors
+/// `PathError::NotFound` if no directory can be determined,
+/// `PathError::NotAbsolute` if the chosen path is relative.
+fn state_dir(app: App, explicit: Option<PathBuf>) -> Result<PathBuf, PathError> {
+    let xdg = ProjectDirs::from("", "", "axon")
+        .and_then(|dirs| dirs.state_dir().map(|dir| dir.join(app.dir_name())));
+    find_dir(DirKind::State, explicit, "STATE_DIRECTORY", xdg)
+}
 
-    /// Where Axon keeps its runtime data
-    /// # Errors
-    /// `PathError::NotFound` if no directory can be determined,
-    /// `PathError::NotAbsolute` if the chosen path is relative.
-    fn runtime_dir(&self, app: App) -> Result<PathBuf, PathError> {
-        let xdg = ProjectDirs::from("", "", "axon")
-            .and_then(|dirs| dirs.runtime_dir().map(|dir| dir.join(app.dir_name())));
-        find_dir(
-            DirKind::Runtime,
-            self.runtime_dir.clone(),
-            "RUNTIME_DIRECTORY",
-            xdg,
-        )
-    }
+/// Where Axon keeps its runtime data
+/// # Errors
+/// `PathError::NotFound` if no directory can be determined,
+/// `PathError::NotAbsolute` if the chosen path is relative.
+fn runtime_dir(app: App, explicit: Option<PathBuf>) -> Result<PathBuf, PathError> {
+    let xdg = ProjectDirs::from("", "", "axon")
+        .and_then(|dirs| dirs.runtime_dir().map(|dir| dir.join(app.dir_name())));
+    find_dir(DirKind::Runtime, explicit, "RUNTIME_DIRECTORY", xdg)
 }
 
 #[cfg(test)]
@@ -192,30 +207,31 @@ mod tests {
     }
 
     #[test]
-    fn relative_path_is_refused() {
-        let result = validate(DirKind::State, Some(PathBuf::from("data")));
-        assert!(matches!(result, Err(PathError::NotAbsolute { .. })));
-    }
-
-    #[test]
     fn absolute_path_is_accepted() {
         let result = validate(DirKind::State, Some(PathBuf::from("/a")));
         assert!(matches!(result, Ok(p) if p == Path::new("/a")));
     }
 
     #[test]
-    fn each_method_uses_its_own_field() {
+    fn each_field_goes_to_its_own_path() {
         let config = RawPaths {
-            state_dir: Some(PathBuf::from("/s")),
-            runtime_dir: Some(PathBuf::from("/r")),
+            state_dir: Some(AbsolutePath::try_from(PathBuf::from("/s")).unwrap()),
+            runtime_dir: Some(AbsolutePath::try_from(PathBuf::from("/r")).unwrap()),
         };
-        assert_eq!(config.state_dir(App::Daemon).unwrap(), Path::new("/s"));
-        assert_eq!(config.runtime_dir(App::Daemon).unwrap(), Path::new("/r"));
+        let paths = config.resolve(App::Daemon).unwrap();
+        assert_eq!(paths.state, Path::new("/s"));
+        assert_eq!(paths.runtime, Path::new("/r"));
     }
 
     #[test]
     fn explicit_config_file_is_used_as_given() {
         let result = config_file(App::Daemon, Some(PathBuf::from("my.toml")));
         assert!(matches!(result, Ok(p) if p == Path::new("my.toml")));
+    }
+
+    #[test]
+    fn relative_path_in_file_is_refused() {
+        let result = toml::from_str::<RawPaths>("state_dir = \"rel\"");
+        assert!(result.is_err());
     }
 }

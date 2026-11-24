@@ -32,4 +32,17 @@ mod tests {
         let result = toml::from_str::<RawConfig>("[path]\nstate_dir = \"/x\"");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn empty_file_uses_defaults() {
+        let result = toml::from_str::<RawConfig>("");
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn known_fields_are_accepted() {
+        let result =
+            toml::from_str::<RawConfig>("[paths]\nstate_dir = \"/s\"\nruntime_dir = \"/r\"");
+        assert!(result.is_ok(), "{result:?}");
+    }
 }

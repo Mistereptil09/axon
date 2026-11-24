@@ -49,7 +49,8 @@ pub fn create_private_dir(path: &Path) -> Result<(), SecretError> {
     check_private(path, mode)
 }
 
-/// Creates a new file as 0600 in one step and writes `contents` into it.
+/// Creates a new file as 0600 in one step, writes `contents` into it and flushes it to disk.
+/// If writing fails, the file is removed again so no half-written secret is left behind.
 /// # Errors
 /// `Io` if the file already exists or can't be written.
 pub fn create_secret(path: &Path, contents: &[u8]) -> Result<(), SecretError> {
@@ -63,7 +64,13 @@ pub fn create_secret(path: &Path, contents: &[u8]) -> Result<(), SecretError> {
         .mode(0o600)
         .open(path)
         .map_err(io)?;
-    file.write_all(contents).map_err(io)
+    if let Err(source) = file.write_all(contents).and_then(|()| file.sync_all()) {
+        // `create_new` means we made this file, so it is ours to remove.
+        // Best effort: the write error is the one worth reporting.
+        let _ = std::fs::remove_file(path);
+        return Err(io(source));
+    }
+    Ok(())
 }
 
 /// Reads a secret, refusing it if group or others have any access.

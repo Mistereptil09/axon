@@ -78,28 +78,59 @@ pub struct Paths {
     pub runtime: PathBuf,
 }
 
+/// Where a directory came from, so an error can tell the user what to fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    ConfigFile,
+    Systemd(&'static str),
+    XdgDefault,
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Source::ConfigFile => write!(f, "the config file"),
+            Source::Systemd(var) => write!(f, "${var}"),
+            Source::XdgDefault => write!(f, "the XDG default (check $HOME)"),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum PathError {
     #[error("no {kind} directory could be determined")]
     NotFound { kind: DirKind },
 
-    #[error("{kind} directory must be absolute: {path}")]
-    NotAbsolute { kind: DirKind, path: PathBuf },
+    #[error("{kind} directory from {origin} must be absolute, got `{path}`")]
+    NotAbsolute {
+        kind: DirKind,
+        origin: Source,
+        path: PathBuf,
+    },
 }
 
+/// Picks the first directory that is set, and remembers where it came from.
 fn resolve_dir(
     explicit: Option<PathBuf>,
     systemd: Option<PathBuf>,
+    env_var: &'static str,
     xdg: Option<PathBuf>,
-) -> Option<PathBuf> {
-    explicit.or(systemd).or(xdg)
+) -> Option<(PathBuf, Source)> {
+    explicit
+        .map(|dir| (dir, Source::ConfigFile))
+        .or(systemd.map(|dir| (dir, Source::Systemd(env_var))))
+        .or(xdg.map(|dir| (dir, Source::XdgDefault)))
 }
 
-fn validate(kind: DirKind, dir: Option<PathBuf>) -> Result<PathBuf, PathError> {
-    let dir = dir.ok_or(PathError::NotFound { kind })?;
+fn validate(kind: DirKind, found: Option<(PathBuf, Source)>) -> Result<PathBuf, PathError> {
+    let (dir, origin) = found.ok_or(PathError::NotFound { kind })?;
 
     if !dir.is_absolute() {
-        return Err(PathError::NotAbsolute { kind, path: dir });
+        return Err(PathError::NotAbsolute {
+            kind,
+            origin,
+            path: dir,
+        });
     }
     Ok(dir)
 }
@@ -107,11 +138,11 @@ fn validate(kind: DirKind, dir: Option<PathBuf>) -> Result<PathBuf, PathError> {
 fn find_dir(
     kind: DirKind,
     explicit: Option<PathBuf>,
-    env_var: &str,
+    env_var: &'static str,
     xdg: Option<PathBuf>,
 ) -> Result<PathBuf, PathError> {
     let systemd = std::env::var_os(env_var).map(PathBuf::from);
-    validate(kind, resolve_dir(explicit, systemd, xdg))
+    validate(kind, resolve_dir(explicit, systemd, env_var, xdg))
 }
 
 /// Where a binary's config file is: `explicit` as given (the `--config` flag),
@@ -166,31 +197,39 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    const VAR: &str = "STATE_DIRECTORY";
+
     #[test]
     fn explicit() {
         let result = resolve_dir(
             Some(PathBuf::from("/a")),
             Some(PathBuf::from("/b")),
+            VAR,
             Some(PathBuf::from("/c")),
         );
-        assert_eq!(result, Some(PathBuf::from("/a")));
+        assert_eq!(result, Some((PathBuf::from("/a"), Source::ConfigFile)));
     }
 
     #[test]
     fn systemd() {
-        let result = resolve_dir(None, Some(PathBuf::from("/b")), Some(PathBuf::from("/c")));
-        assert_eq!(result, Some(PathBuf::from("/b")));
+        let result = resolve_dir(
+            None,
+            Some(PathBuf::from("/b")),
+            VAR,
+            Some(PathBuf::from("/c")),
+        );
+        assert_eq!(result, Some((PathBuf::from("/b"), Source::Systemd(VAR))));
     }
 
     #[test]
     fn xdg() {
-        let result = resolve_dir(None, None, Some(PathBuf::from("/c")));
-        assert_eq!(result, Some(PathBuf::from("/c")));
+        let result = resolve_dir(None, None, VAR, Some(PathBuf::from("/c")));
+        assert_eq!(result, Some((PathBuf::from("/c"), Source::XdgDefault)));
     }
 
     #[test]
     fn none() {
-        let result = resolve_dir(None, None, None);
+        let result = resolve_dir(None, None, VAR, None);
         assert_eq!(result, None);
     }
 
@@ -208,8 +247,23 @@ mod tests {
 
     #[test]
     fn absolute_path_is_accepted() {
-        let result = validate(DirKind::State, Some(PathBuf::from("/a")));
+        let result = validate(
+            DirKind::State,
+            Some((PathBuf::from("/a"), Source::XdgDefault)),
+        );
         assert!(matches!(result, Ok(p) if p == Path::new("/a")));
+    }
+
+    #[test]
+    fn relative_path_names_where_it_came_from() {
+        let result = validate(DirKind::State, Some((PathBuf::new(), Source::Systemd(VAR))));
+        assert!(matches!(
+            result,
+            Err(PathError::NotAbsolute {
+                origin: Source::Systemd(VAR),
+                ..
+            })
+        ));
     }
 
     #[test]
